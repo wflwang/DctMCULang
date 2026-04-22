@@ -1,0 +1,64 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Dctpdk",
+    "scopeName": "source.dctpdk",
+    "fileTypes": ["pdk", "asm", "inc"],
+    "patterns": [
+        {
+            "name": "comment.line.pdk",
+            "match": "(;|//).*$",
+            "settings": { "foreground": "#008000" }
+        },
+        {
+            "name": "entity.name.label.assembly",
+            "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*):",
+            "settings": { "foreground": "#FFCC00" }
+        },
+        {
+            "name": "keyword.control.pseudo.pdk",
+            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM|.ADJUST_IC)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "keyword.control.pseudo.pdk",
+            "match": "#(?i)\\b(DEFINE|INCLUDE|IF|IFDEF|IFNDEF|ELIF|ELSE|ENDIF)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "keyword.control.pseudo.pdk",
+            "match": "(?i)\\b(IF|IFDEF|IFNDEF|ELIF|ELSE|ENDIF)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "support.function.macro.pdk",
+            "match": "^\\s*([A-Z_][A-Z0-9_]*)\\b",
+            "captures": {
+                "1": { "settings": { "foreground": "#CC66FF" } }
+            }
+        },
+
+        {
+            "name": "string.include.file.pdk",
+            "match": "([\">])([^\">]+)\\1",
+            "captures": {
+                "1": { "name": "punctuation.definition.string.begin.pdk" },
+                "2": { "name": "string.file.include.pdk", "settings": { "foreground": "#FFFF99", "background": "#333300" } }
+            }
+        },
+        {
+            "name": "keyword.instruction.pdk",
+            "match": "(?i)\\b(MOV|ADD|ADDC|NADD|SUB|SUBC|AND|OR|XOR|NEG|NOT|CLEAR|SET0|SET1|INC|DEC|SL|SR|SLC|SRC|COMP|SWAP|SWAPC|GOTO|CEQSN|CENQSN|T0SN|T1SN|IZSN|DZSN|CALL|RET|RETI|NOP|PUSHAF|POPAF|LDT16|STT16|IDXM|XCH|ENGINT|PCADD|DISGINT|STOPSYS|STOPEXE|RESET|WDRESET)\\b",
+            "settings": { "foreground": "#0066FF" }
+        },
+        {
+            "name": "constant.numeric.pdk",
+            "match": "\\b(0x[0-9A-Fa-f]+|\\d+)\\b",
+            "settings": { "foreground": "#FF6600" }
+        },
+        {
+            "name": "variable.register.pdk",
+            "match": "(?i)\\b(a|pa|pb)\\b",
+            "settings": { "foreground": "#9933CC" }
+        }
+    ]
+}

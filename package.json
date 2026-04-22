@@ -1,0 +1,97 @@
+{
+    "name": "dctmculang-syntax",
+    "displayName": "DctMCULang",
+    "description": "DctMCULang 程序智能化编辑工具 - 支持 PDK、HXW、NY 系列单片机语法高亮和实时检查",
+    "version": "0.0.1",
+    "repository": {
+        "type": "git",
+        "url": "https://gitee.com/dctpdk/dctpdk-syntax"
+    },
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "main": "./out/extension.js",
+    "activationEvents": [
+        "onLanguage:plaintext",
+        "onLanguage:dctpdk",
+        "onLanguage:DctNY",
+        "onLanguage:DctHXW"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "dctpdk",
+                "aliases": [
+                    "Dctpdk",
+                    "PDK",
+                    "PFS122"
+                ],
+                "extensions": [
+                    ".pdk",
+                    ".asm",
+                    ".inc"
+                ]
+            },
+            {
+                "id": "DctNY",
+                "aliases": [
+                    "DctNY",
+                    "九齐"
+                ],
+                "extensions": []
+            },
+            {
+                "id": "DctHXW",
+                "aliases": [
+                    "DctHXW",
+                    "华芯微"
+                ],
+                "extensions": []
+            }
+        ],
+        "grammars": [
+            {
+                "language": "dctpdk",
+                "scopeName": "source.dctpdk",
+                "path": "./syntaxes/yingguang.tmLanguage.json"
+            },
+            {
+                "language": "DctNY",
+                "scopeName": "source.DctNY",
+                "path": "./syntaxes/DctNY.tmLanguage.json"
+            },
+            {
+                "language": "DctHXW",
+                "scopeName": "source.DctHXW",
+                "path": "./syntaxes/DctHXW.tmLanguage.json"
+            }
+        ]
+    },
+    "scripts": {
+        "compile": "tsc -p ./",
+        "compile:server": "tsc -p ./server/tsconfig.json",
+        "clean": "if exist out (rd /s /q out)"
+    },
+    "devDependencies": {
+        "@types/node": "^16",
+        "@types/vscode": "^1.80.0",
+        "typescript": "^5.1.3",
+        "vscode-languageclient": "^8.1.0",
+        "vscode-languageserver": "^9.0.1"
+    },
+    "galleryBanner": {
+        "color": "#0066FF",
+        "theme": "dark"
+    },
+    "publisher": "dctpdk",
+    "keywords": [
+        "pdk",
+        "dctpdk",
+        "assembly",
+        "PFS122",
+        "ide"
+    ],
+    "vsce": {
+        "baseImagesUrl": "https://gitee.com/dctpdk/dctpdk-syntax/raw/master"
+    }
+}
