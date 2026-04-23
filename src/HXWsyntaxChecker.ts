@@ -849,8 +849,8 @@ export function checkHXWSyntax(document: vscode.TextDocument): vscode.Diagnostic
       }
     }
 
-    // GOTO/CALL 标签检查
-    if ((inst === 'GOTO' || inst === 'CALL') && tokens.length >= 2) {
+    // GOTO/CALL 标签检查（跳过宏定义内部的行）
+    if ((inst === 'GOTO' || inst === 'CALL') && tokens.length >= 2 && !macroLines.has(line)) {
       const target = tokens[1].toUpperCase();
       if (/^\$[+-]\d+$/.test(target)) {
         // 相对跳转
