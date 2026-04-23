@@ -29,13 +29,6 @@
             "match": "(?i)\\b(IF|IFDEF|IFNDEF|ELIF|ELSE|ENDIF)\\b",
             "settings": { "foreground": "#6699FF" }
         },
-        {
-            "name": "support.function.macro.pdk",
-            "match": "^\\s*([A-Z_][A-Z0-9_]*)\\b",
-            "captures": {
-                "1": { "settings": { "foreground": "#CC66FF" } }
-            }
-        },
 
         {
             "name": "keyword.instruction.hxw",
@@ -43,11 +36,29 @@
             "settings": { "foreground": "#0066FF" }
         },
         {
+            "name": "cblock.variable.pdk",
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "context": [
+                {
+                    "match": "\\bCBLOCK\\b",
+                    "push": "cblock"
+                },
+                {
+                    "context": "cblock",
+                    "match": "\\bENDC\\b",
+                    "pop": true
+                }
+            ],
+            "settings": { "foreground": "#FFFFFF" }
+        },
+
+
+        {
             "name": "string.include.file.pdk",
             "match": "([\">])([^\">]+)\\1",
             "captures": {
-                "1": { "name": "punctuation.definition.string.begin.pdk" },
-                "2": { "name": "string.file.include.pdk", "settings": { "foreground": "#FFFF99", "background": "#333300" } }
+                "1": { "settings": { "foreground": "#6699FF" } },
+                "2": { "settings": { "foreground": "#FFFF99", "background": "#333300" } }
             }
         },
         {

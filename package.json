@@ -3,7 +3,7 @@
     "displayName": "DctMCULang",
     "description": "DctMCULang 程序智能化编辑工具 - 支持 PDK、HXW、NY 系列单片机语法高亮和实时检查",
     "icon": "IC7.png",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "repository": {
         "type": "git",
         "url": "https://github.com/wflwang"

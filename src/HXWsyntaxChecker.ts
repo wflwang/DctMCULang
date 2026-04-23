@@ -396,13 +396,10 @@ function evaluateExpression(expr: string, defines: Map<string, string>): number 
     // 替换十六进制格式
     expanded = expanded.replace(/0x([0-9A-Fa-f]+)/g, (_, hex) => parseInt(hex, 16).toString());
 
-    // 安全计算表达式（只允许数字和运算符）
-    const safeExpr = expanded.replace(/[^0-9+\-*\/|&^!()]/g, '');
-    if (!safeExpr || safeExpr !== expanded.replace(/\s/g, '')) {
-      return null; // 表达式包含不安全字符
-    }
+    // 移除空格
+    const safeExpr = expanded.replace(/\s/g, '');
 
-    // 使用 Function 构造器计算（比 eval 安全，因为只允许特定字符）
+    // 尝试直接计算表达式
     const result = new Function(`return (${safeExpr})`)();
     if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
       return Math.floor(result);
@@ -470,18 +467,20 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
     return { valid: false, error: `操作数格式错误` };
   }
 
-  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10）
-  // 提取第一个符号部分并检查是否定义
-  if (/^[A-Za-z_][A-Za-z0-9_]*[\+\-\*\/\|\(\)\^!]/.test(trimmed)) {
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
-    if (match) {
-      const firstSymbol = match[1].toUpperCase();
-      if (defines.has(firstSymbol)) {
-        return { valid: true }; // 基础符号已定义，表达式由汇编器处理
+  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10、0|(0<<1)）
+  if (/[\+\-\*\/\|\(\)\^!]/.test(trimmed)) {
+    // 尝试计算表达式
+    const evalResult = evaluateExpression(trimmed, defines);
+    if (evalResult !== null) {
+      if (evalResult >= 0 && evalResult <= 255) {
+        return { valid: true, value: evalResult };
       } else {
-        return { valid: false, error: `符号 ${firstSymbol} 未定义` };
+        return { valid: false, error: `表达式值 ${evalResult} 超出范围 (0-255)` };
       }
     }
+    // 如果表达式包含运算符，即使有未定义的符号，也允许通过
+    // 因为这可能是一个合法的位操作表达式，由汇编器处理
+    return { valid: true };
   }
 
   // 直接是数字

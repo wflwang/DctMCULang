@@ -30,7 +30,7 @@ const NY_INSTRUCTIONS = new Set([
 
 // 伪指令
 const NY_PSEUDO = new Set([
-  'MACRO', 'ENDM', 'ORG', 'END', 'EQU', 'DB', 'DW',
+  'MACRO', 'ENDM', 'ORG', 'END', 'EQU', 'DB', 'DW', 'CBLOCK', 'ENDC',
   '.ADJUST_IC', 'ELSE', 'ENDC', 'ENDFOR', 'ENDIF',
   'ENDS', 'ENDSW', 'ENDW', 'ERROR', 'EXITM', 'EXPAND',
   'FOR', 'LINES', 'LIST', 'LOCAL', 'MAXMACRODEPTH',
@@ -61,7 +61,7 @@ const NY_RAM_INSTRUCTIONS = new Set([
   'ANDAR', 'IORAR', 'XORAR', 'ADDAR', 'SUBAR', 'ADCAR', 'SBCAR',
   'COMR', 'INCR', 'DECR', 'CLRR', 'CMPAR',
   'BTRSC', 'BTRSS', 'INCRSZ', 'DECRSZ',
-  'MOVR', 'IOST', 'IOSTR', 'SFUN', 'SFUNR',
+  'MOVAR', 'MOVR', 'IOST', 'IOSTR', 'SFUN', 'SFUNR',
   'BSR', 'BCR', 'RRR', 'RLR', 'SWAPR'
 ]);
 
@@ -223,9 +223,47 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
   const lines = content.split('\n');
   const dir = path.dirname(filePath);
 
+  let inCblock = false;
+  let cblockStartNum = 0;
+  let cblockCurrentNum = 0;
+
   for (const line of lines) {
     const trimLine = line.trim();
     if (!trimLine || trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
+
+    // 处理 cblock 开始
+    const cblockMatch = trimLine.match(/^\s*CBLOCK\s+(\S+)/i);
+    if (cblockMatch) {
+      const startNumStr = cblockMatch[1];
+      const startNum = parseNumber(startNumStr);
+      if (startNum !== null && startNum >= 0 && startNum <= 255) {
+        inCblock = true;
+        cblockStartNum = startNum;
+        cblockCurrentNum = cblockStartNum;
+      }
+      continue;
+    }
+
+    // 处理 cblock 结束
+    if (/^\s*ENDC\b/i.test(trimLine)) {
+      inCblock = false;
+      continue;
+    }
+
+    // 处理 cblock 内部的变量定义
+    if (inCblock) {
+      // 提取变量名（可以是多个变量，用空格或换行分隔）
+      const vars = trimLine.split(/\s+/).filter(v => v && !v.startsWith(';'));
+      for (const varName of vars) {
+        if (varName && /^[A-Za-z_][A-Za-z0-9_]*$/.test(varName)) {
+          const upperName = varName.toUpperCase();
+          labels.add(upperName);
+          defines.set(upperName, cblockCurrentNum.toString());
+          cblockCurrentNum++;
+        }
+      }
+      continue;
+    }
 
     // 收集标签行 (LABEL:)
     const labelMatch = trimLine.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:/);
@@ -271,7 +309,7 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
     }
 
     // 收集 include 文件路径
-    const includeMatch = trimLine.match(/#include\s+([">])([^">]+)\1/i);
+    const includeMatch = trimLine.match(/#include\s+([">])([^>"]+)\1/i);
     if (includeMatch) {
       const incPath = path.join(dir, includeMatch[2]);
       includes.push(incPath);
@@ -361,7 +399,7 @@ function resolveToValue(symbol: string, defines: Map<string, string>, visited: S
   }
 
   // 如果包含运算符，尝试计算表达式（如 39+5、0x20+1）
-  if (/[\+\-\*\/\|\(\)\^!]/.test(value)) {
+  if (/[+\-*/|\(\)\^!]/.test(value)) {
     const evalResult = evaluateExpression(value, defines);
     if (evalResult !== null) {
       return evalResult;
@@ -398,13 +436,10 @@ function evaluateExpression(expr: string, defines: Map<string, string>): number 
     // 替换十六进制格式
     expanded = expanded.replace(/0x([0-9A-Fa-f]+)/gi, (_, hex) => parseInt(hex, 16).toString());
 
-    // 安全计算表达式（只允许数字和运算符）
-    const safeExpr = expanded.replace(/[^0-9+\-*\/|&^!()]/g, '');
-    if (!safeExpr || safeExpr !== expanded.replace(/\s/g, '')) {
-      return null; // 表达式包含不安全字符
-    }
+    // 移除空格
+    const safeExpr = expanded.replace(/\s/g, '');
 
-    // 使用 Function 构造器计算（比 eval 安全，因为只允许特定字符）
+    // 尝试直接计算表达式
     const result = new Function(`return (${safeExpr})`)();
     if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
       return Math.floor(result);
@@ -449,7 +484,7 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
       }
       // 无法追踪到纯数字值，可能是带运算符的表达式（如 0x04|1、39+5）
       // 尝试计算表达式
-      if (/[\+\-\*\/\|\(\)\^!]/.test(firstPart)) {
+      if (/[+\-*/|\(\)\^!]/.test(firstPart)) {
         const evalResult = evaluateExpression(firstPart, defines);
         if (evalResult !== null) {
           if (evalResult >= 0 && evalResult <= 255) {
@@ -472,18 +507,20 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
     return { valid: false, error: `操作数格式错误` };
   }
 
-  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10）
-  // 提取第一个符号部分并检查是否定义
-  if (/^[A-Za-z_][A-Za-z0-9_]*[\+\-\*\/\|\(\)\^!]/.test(trimmed)) {
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
-    if (match) {
-      const firstSymbol = match[1].toUpperCase();
-      if (defines.has(firstSymbol)) {
-        return { valid: true }; // 基础符号已定义，表达式由汇编器处理
+  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10、0|(0<<1)）
+  if (/[+\-*/|\(\)\^!]/.test(trimmed)) {
+    // 尝试计算表达式
+    const evalResult = evaluateExpression(trimmed, defines);
+    if (evalResult !== null) {
+      if (evalResult >= 0 && evalResult <= 255) {
+        return { valid: true, value: evalResult };
       } else {
-        return { valid: false, error: `符号 ${firstSymbol} 未定义` };
+        return { valid: false, error: `表达式值 ${evalResult} 超出范围 (0-255)` };
       }
     }
+    // 如果表达式包含运算符，即使有未定义的符号，也允许通过
+    // 因为这可能是一个合法的位操作表达式，由汇编器处理
+    return { valid: true };
   }
 
   // 直接是数字
@@ -502,7 +539,7 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
 
   if (resolved === null) {
     // 追踪失败，可能是展开后的表达式（如 39+5），尝试计算
-    if (/[\+\-\*\/\|\(\)\^!]/.test(trimmed)) {
+    if (/[+\-*/|\(\)\^!]/.test(trimmed)) {
       const evalResult = evaluateExpression(trimmed, defines);
       if (evalResult !== null) {
         if (evalResult >= 0 && evalResult <= 255) {
@@ -512,12 +549,12 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
         }
       }
     }
-    // 追踪失败且无法计算表达式
-    if (visited.size === 0) {
+    // 检查符号是否在定义中
+    if (!defines.has(trimmed.toUpperCase())) {
       return { valid: false, error: `符号 ${trimmed} 未定义` };
-    } else {
-      return { valid: false, error: `符号 ${trimmed} 无法解析为有效数值（可能循环定义或未定义）` };
     }
+    // 追踪失败且无法计算表达式
+    return { valid: false, error: `符号 ${trimmed} 无法解析为有效数值（可能循环定义）` };
   }
 
   if (resolved < 0 || resolved > 255) {
@@ -691,10 +728,175 @@ function getMacroDefinitionLines(content: string): Set<number> {
   return macroLines;
 }
 
+// 收集 cblock 内部的行号范围
+function getCblockDefinitionLines(content: string): Set<number> {
+  const lines = content.split('\n');
+  const cblockLines = new Set<number>();
+  let inCblock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // 跳过注释行
+    if (line.startsWith(';') || line.startsWith('//')) continue;
+
+    // 去除注释后检查
+    const lineWithoutComment = line.replace(/;.*$/, '').trim();
+
+    // 检查是否是 cblock 开始
+    if (/^\s*CBLOCK\s+\S+/i.test(lineWithoutComment)) {
+      inCblock = true;
+    }
+
+    // 如果在 cblock 内，收集行号
+    if (inCblock) {
+      cblockLines.add(i);
+
+      // 检查是否是 cblock 结束
+      if (/^\s*ENDC\b/i.test(lineWithoutComment)) {
+        inCblock = false;
+      }
+    }
+  }
+
+  return cblockLines;
+}
+
+// 检查成对指令（条件指令、宏定义、cblock）
+function checkPairedDirectives(content: string, document: vscode.TextDocument): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+  const lines = content.split('\n');
+  
+  // 条件指令栈
+  const condStack: { type: string; line: number }[] = [];
+  // 宏定义栈
+  const macroStack: { line: number }[] = [];
+  // cblock栈
+  const cblockStack: { line: number; startNum: number }[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const textWithoutComment = line.replace(/;.*$/, '').replace(/\/\/.*$/, '').trim();
+    
+    if (!textWithoutComment) continue;
+
+    // 条件指令检查
+    const condMatch = textWithoutComment.match(/^\s*(?:#\s*)?\.?(IF|IFDEF|IFNDEF)\b/i);
+    if (condMatch) {
+      condStack.push({ type: condMatch[1].toUpperCase(), line: i });
+    }
+    
+    if (/^\s*(?:#\s*)?\.?(ENDIF)\b/i.test(textWithoutComment)) {
+      if (condStack.length === 0) {
+        // 多余的ENDIF
+        diagnostics.push({
+          range: new vscode.Range(i, 0, i, line.length),
+          message: `多余的 ENDIF，没有对应的 IF/IFDEF/IFNDEF`,
+          severity: vscode.DiagnosticSeverity.Error
+        });
+      } else {
+        condStack.pop();
+      }
+    }
+
+    // 宏定义检查
+    if (/^[A-Za-z_][A-Za-z0-9_]*\s+MACRO\b/i.test(textWithoutComment)) {
+      macroStack.push({ line: i });
+    }
+    
+    if (/\bENDM\b/i.test(textWithoutComment)) {
+      if (macroStack.length === 0) {
+        // 多余的ENDM
+        diagnostics.push({
+          range: new vscode.Range(i, 0, i, line.length),
+          message: `多余的 ENDM，没有对应的 MACRO`,
+          severity: vscode.DiagnosticSeverity.Error
+        });
+      } else {
+        macroStack.pop();
+      }
+    }
+
+    // cblock检查
+    const cblockMatch = textWithoutComment.match(/^\s*CBLOCK\b/i);
+    if (cblockMatch) {
+      // 检查是否有起始数字
+      const startNumMatch = textWithoutComment.match(/^\s*CBLOCK\s+(\S+)/i);
+      if (!startNumMatch) {
+        // cblock后面没有数字
+        diagnostics.push({
+          range: new vscode.Range(i, 0, i, line.length),
+          message: `CBLOCK 必须指定起始数字 (0-255)`,
+          severity: vscode.DiagnosticSeverity.Error
+        });
+      } else {
+        const startNumStr = startNumMatch[1];
+        const startNum = parseNumber(startNumStr);
+        if (startNum === null || startNum < 0 || startNum > 255) {
+          // cblock开始数字错误
+          diagnostics.push({
+            range: new vscode.Range(i, 0, i, line.length),
+            message: `CBLOCK 开始数字必须是 0-255 的有效数值`,
+            severity: vscode.DiagnosticSeverity.Error
+          });
+        }
+        cblockStack.push({ line: i, startNum: startNum || 0 });
+      }
+    }
+    
+    if (/^\s*ENDC\b/i.test(textWithoutComment)) {
+      if (cblockStack.length === 0) {
+        // 多余的ENDC
+        diagnostics.push({
+          range: new vscode.Range(i, 0, i, line.length),
+          message: `多余的 ENDC，没有对应的 CBLOCK`,
+          severity: vscode.DiagnosticSeverity.Error
+        });
+      } else {
+        cblockStack.pop();
+      }
+    }
+  }
+
+  // 检查未闭合的条件指令
+  for (const item of condStack) {
+    diagnostics.push({
+      range: new vscode.Range(item.line, 0, item.line, lines[item.line].length),
+      message: `未闭合的 ${item.type}，缺少对应的 ENDIF`,
+      severity: vscode.DiagnosticSeverity.Error
+    });
+  }
+
+  // 检查未闭合的宏定义
+  for (const item of macroStack) {
+    diagnostics.push({
+      range: new vscode.Range(item.line, 0, item.line, lines[item.line].length),
+      message: `未闭合的 MACRO，缺少对应的 ENDM`,
+      severity: vscode.DiagnosticSeverity.Error
+    });
+  }
+
+  // 检查未闭合的cblock
+  for (const item of cblockStack) {
+    diagnostics.push({
+      range: new vscode.Range(item.line, 0, item.line, lines[item.line].length),
+      message: `未闭合的 CBLOCK，缺少对应的 ENDC`,
+      severity: vscode.DiagnosticSeverity.Error
+    });
+  }
+
+  return diagnostics;
+}
+
 export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
   const docDir = path.dirname(document.uri.fsPath);
   const content = document.getText();
+  
+  // 检查成对指令
+  const pairedDiagnostics = checkPairedDirectives(content, document);
+  diagnostics.push(...pairedDiagnostics);
+  
   const { labels, defines, macros } = collectSymbols(document, docDir);
 
   // 获取需要跳过的非活动行（预处理指令顺序执行）
@@ -702,11 +904,17 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
 
   // 获取宏定义内部的行（这些行不进行操作数验证）
   const macroLines = getMacroDefinitionLines(content);
+  // 获取 cblock 内部的行（这些行不进行操作数验证）
+  const cblockLines = getCblockDefinitionLines(content);
 
   // 逐行检查
   for (let line = 0; line < document.lineCount; line++) {
     // 跳过非活动块中的行
     if (inactiveLines.has(line)) continue;
+    // 跳过宏定义内部的行
+    if (macroLines.has(line)) continue;
+    // 跳过 cblock 内部的行
+    if (cblockLines.has(line)) continue;
 
     const text = document.lineAt(line).text;
     const trimText = text.trim();

@@ -14,6 +14,20 @@ ccb equ 33
 porta equ  0x04|1
 #define PIN_333 porta,3
 temp    equ     390
+setio   equ     0x0|(0<<1)|(0<<2)|(0<<3)
+#define setio1   0x0|(0<<1)|(0<<2)|(0<<3)|(1<<4)
+cblock  0x10
+temp2
+temp3
+temp4
+temp6
+temp5
+endc
+ddx  macro  temp3,temp2
+    movia       temp2
+    movar       temp3
+endm
+
 
     ORG 0x1000
 
@@ -32,12 +46,24 @@ LOOP:
     bcr     PIN_333
     movia   ad10
     movia   ddd
+    ddx
+    movia
+    RXROLL1
+    movar
+    sdf1
     xorar   ad10,0
-    movar   ad10
+    xorar   temp4,0
+    movar   temp2
+    movar   temp3
+    movr    temp2,0
     xoria   ad10
     addar   ad10,1
+    movia   setio
+    movar   0x04
+    movia   setio1
+    movia   setio
     adcar   ad10,1
-    return
+    ret
     retia   3
     retie
     subar   add10,0

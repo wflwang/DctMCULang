@@ -16,8 +16,15 @@
         },
         {
             "name": "keyword.control.pseudo.pdk",
-            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM)\\b",
+            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM|CBLOCK|ENDC|ERROR)\\b",
             "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "string.error.pdk",
+            "match": "(?i)\\bERROR\\b\\s+(.*)$",
+            "captures": {
+                "1": { "settings": { "foreground": "#FF6699" } }
+            }
         },
         {
             "name": "keyword.control.pseudo.pdk",
@@ -30,19 +37,11 @@
             "settings": { "foreground": "#6699FF" }
         },
         {
-            "name": "support.function.macro.pdk",
-            "match": "^\\s*([A-Z_][A-Z0-9_]*)\\b",
-            "captures": {
-                "1": { "settings": { "foreground": "#CC66FF" } }
-            }
-        },
-
-        {
             "name": "string.include.file.pdk",
             "match": "([\">])([^\">]+)\\1",
             "captures": {
-                "1": { "name": "punctuation.definition.string.begin.pdk" },
-                "2": { "name": "string.file.include.pdk", "settings": { "foreground": "#FFFF99", "background": "#333300" } }
+                "1": { "settings": { "foreground": "#6699FF" } },
+                "2": { "settings": { "foreground": "#FFFF99", "background": "#333300" } }
             }
         },
         {
@@ -50,6 +49,24 @@
             "match": "(?i)\\b(ANDAR|IORAR|XORAR|ANDIA|IORIA|XORIA|ADDAR|SUBAR|ADCAR|SBCAR|ADDIA|SUBIA|ADCIA|SBCIA|RRR|RLR|COMR|INCR|DECR|CLRA|CLRR|DAA|CMPAR|BTRSC|BTRSS|INCRSZ|DECRSZ|MOVAR|MOVR|MOVIA|IOST|IOSTR|SFUN|SFUNR|T0MD|T0MDR|NOP|SLEEP|CLRWDT|ENI|DISI|INT|RET|RETIE|RETIA|CALLA|GOTOA|LCALL|LGOTO|TABLEA|BSR|BCR|SWAPR)\\b",
             "settings": { "foreground": "#0066FF" }
         },
+        {
+            "name": "cblock.variable.pdk",
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "context": [
+                {
+                    "match": "\\bCBLOCK\\b",
+                    "push": "cblock"
+                },
+                {
+                    "context": "cblock",
+                    "match": "\\bENDC\\b",
+                    "pop": true
+                }
+            ],
+            "settings": { "foreground": "#FFFFFF" }
+        },
+
+
         {
             "name": "constant.numeric.pdk",
             "match": "\\b(0x[0-9A-Fa-f]+|\\d+)\\b",
