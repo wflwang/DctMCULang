@@ -1,4 +1,7 @@
 import * as vscode from 'vscode';
+import * as child_process from 'child_process';
+import * as path from 'path';
+import * as fs from 'fs';
 import { checkSyntaxErrors } from './syntaxChecker';
 import { checkHXWSyntax } from './HXWsyntaxChecker';
 import { checkNYSyntax } from './NYsyntaxChecker';
@@ -160,6 +163,264 @@ function updateInactiveDecorations(editor: vscode.TextEditor) {
   editor.setDecorations(inactiveDecorationType, inactiveRanges);
 }
 
+// 执行编译命令
+function buildProject() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage('No active editor found.');
+    return;
+  }
+
+  const doc = editor.document;
+  const firstLine = doc.lineAt(0).text.trim();
+  const filePath = doc.uri.fsPath;
+  const fileDir = path.dirname(filePath);
+  const fileName = path.basename(filePath, path.extname(filePath));
+
+  // 检测语言类型并设置编译命令
+  let langId = '';
+  let compileCmd = '';
+
+  if (firstLine === ';//@@@PDK inst###' || firstLine === ';//@@@PAK inst###') {
+    langId = 'PDK';
+  } else if (firstLine === ';//@@@NY inst###') {
+    langId = 'NY';
+  } else if (firstLine === ';//@@@HXW inst###') {
+    langId = 'HXW';
+  } else {
+    vscode.window.showErrorMessage('Unsupported language. Please add language header.');
+    return;
+  }
+
+  // 收集当前文件所在目录下的所有相关文件
+  const files = collectRelatedFiles(fileDir, langId);
+
+  // 显示编译信息
+  vscode.window.showInformationMessage(`Building ${langId} project...`);
+  vscode.window.createOutputChannel(`Build - ${langId}`).show();
+
+  const outputChannel = vscode.window.createOutputChannel(`Build - ${langId}`);
+  outputChannel.show();
+  outputChannel.appendLine(`=== Building ${langId} Project ===`);
+  outputChannel.appendLine(`Main file: ${filePath}`);
+  outputChannel.appendLine(`Related files: ${files.length}`);
+  outputChannel.appendLine('');
+
+  // 执行编译命令
+  const terminal = vscode.window.createTerminal({
+    name: `Build ${langId}`,
+    cwd: fileDir
+  });
+
+  // 根据语言类型构建编译命令
+  // 这里使用假设的编译命令，实际需要根据华芯微IDE的具体命令来设置
+  // 例如：hxwasm -o output.hex file1.asm file2.asm
+  const compileCommand = buildCompileCommand(langId, files, fileDir);
+
+  if (compileCommand) {
+    terminal.sendText(compileCommand);
+    terminal.show();
+  } else {
+    vscode.window.showErrorMessage('Compiler not configured. Please set compiler path in settings.');
+  }
+}
+
+// 收集当前文件所在目录下的所有相关文件
+function collectRelatedFiles(dir: string, langId: string): string[] {
+  const files: string[] = [];
+  const extMap: { [key: string]: string[] } = {
+    'PDK': ['.pdk', '.asm', '.inc'],
+    'NY': ['.ny', '.asm', '.inc'],
+    'HXW': ['.asm', '.inc', '.hxg']
+  };
+
+  const extensions = extMap[langId] || ['.asm'];
+
+  try {
+    const entries = fs.readdirSync(dir);
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          const ext = path.extname(entry).toLowerCase();
+          if (extensions.includes(ext)) {
+            files.push(fullPath);
+          }
+        }
+      } catch {
+        // 忽略无法访问的文件
+      }
+    }
+  } catch {
+    // 忽略无法读取的目录
+  }
+
+  return files;
+}
+
+// 构建编译命令
+function buildCompileCommand(langId: string, files: string[], fileDir: string): string {
+  const outputChannel = vscode.window.createOutputChannel(`Build - ${langId}`);
+  outputChannel.show();
+
+  const ideBasePath = getIDEBasPath();
+  if (!ideBasePath) {
+    outputChannel.appendLine('Error: IDE path not found');
+    return '';
+  }
+  outputChannel.appendLine(`IDE Path: ${ideBasePath}`);
+
+  const gmaPath = path.join(ideBasePath, 'Bin', 'Build', 'gma.exe');
+  const slinkPath = path.join(ideBasePath, 'Bin', 'Build', 'slink.exe');
+
+  if (!fs.existsSync(gmaPath)) {
+    outputChannel.appendLine(`Error: Assembler not found at ${gmaPath}`);
+    vscode.window.showErrorMessage(`汇编器未找到: ${gmaPath}`);
+    return '';
+  }
+  if (!fs.existsSync(slinkPath)) {
+    outputChannel.appendLine(`Error: Linker not found at ${slinkPath}`);
+    vscode.window.showErrorMessage(`链接器未找到: ${slinkPath}`);
+    return '';
+  }
+  outputChannel.appendLine(`Assembler: ${gmaPath}`);
+  outputChannel.appendLine(`Linker: ${slinkPath}`);
+
+  const iniFile = findChipIniFile(fileDir, ideBasePath);
+  if (!iniFile) {
+    outputChannel.appendLine('Error: Chip configuration file (.ini) not found');
+    vscode.window.showErrorMessage('芯片配置文件(.ini)未找到。请在项目目录或IDE目录中放置INI文件。');
+    return '';
+  }
+  outputChannel.appendLine(`Chip Config: ${iniFile}`);
+  outputChannel.appendLine('');
+
+  const outputName = path.basename(fileDir);
+  const objDir = path.join(fileDir, 'Obj');
+  const outputFile = path.join(objDir, `${outputName}.out`);
+
+  if (!fs.existsSync(objDir)) {
+    try {
+      fs.mkdirSync(objDir, { recursive: true });
+      outputChannel.appendLine(`Created directory: ${objDir}`);
+    } catch (e) {
+      outputChannel.appendLine(`Error: Cannot create Obj directory - ${e}`);
+      vscode.window.showErrorMessage('无法创建 Obj 目录。');
+      return '';
+    }
+  }
+
+  const asmFiles = files.filter(f => f.toLowerCase().endsWith('.asm'));
+  if (asmFiles.length === 0) {
+    outputChannel.appendLine('Error: No assembly files found to compile');
+    vscode.window.showErrorMessage('未找到要编译的汇编文件(.asm)。');
+    return '';
+  }
+
+  outputChannel.appendLine(`Found ${asmFiles.length} assembly file(s):`);
+  for (const f of asmFiles) {
+    outputChannel.appendLine(`  - ${path.basename(f)}`);
+  }
+  outputChannel.appendLine('');
+
+  let assembleCommands = '';
+  for (const asmFile of asmFiles) {
+    const objFile = path.join(objDir, path.basename(asmFile, '.asm') + '.obj');
+    assembleCommands += `"${gmaPath}" /INI:"${iniFile}" /OutputPath:"${objDir}" "${asmFile}"\n`;
+  }
+
+  const linkCommand = `"${slinkPath}" /INI:"${iniFile}" /OUTPUTFILE:"${outputFile}" /MAP /LINKFILE:"${path.join(objDir, 'link.txt')}"`;
+
+  // 添加 ROM 转换命令
+  const rcvPath = path.join(ideBasePath, 'Bin', 'Build', 'RcvSN8.exe');
+  const hexFile = path.join(objDir, `${outputName}.hex`);
+  
+  let rcvCommand = '';
+  if (fs.existsSync(rcvPath)) {
+    rcvCommand = `"${rcvPath}" /INI:"${iniFile}" /OUTPUTFILE:"${hexFile}" "${outputFile}"`;
+  } else {
+    const rcvExePath = path.join(ideBasePath, 'Bin', 'Build', 'Rcv.exe');
+    if (fs.existsSync(rcvExePath)) {
+      rcvCommand = `"${rcvExePath}" /INI:"${iniFile}" /OUTPUTFILE:"${hexFile}" "${outputFile}"`;
+    }
+  }
+
+  outputChannel.appendLine('=== Build Commands ===');
+  outputChannel.appendLine(assembleCommands);
+  outputChannel.appendLine(linkCommand);
+  if (rcvCommand) {
+    outputChannel.appendLine(rcvCommand);
+  }
+  outputChannel.appendLine('');
+
+  let fullCommand = assembleCommands;
+  fullCommand += linkCommand + '\n';
+  if (rcvCommand) {
+    fullCommand += rcvCommand + '\n';
+  }
+  return fullCommand;
+}
+
+// 获取IDE基础路径
+function getIDEBasPath(): string | null {
+  const config = vscode.workspace.getConfiguration('dctmculang');
+  const idePath = config.get<string>('idePath');
+
+  if (idePath && fs.existsSync(idePath)) {
+    return idePath;
+  }
+
+  const defaultPaths = [
+    'E:\\IC\\HXW\\IDE_V2.1.13_20260205\\IDE_V2.1.13_20260205',
+    'C:\\Program Files\\HXW\\IDE',
+    'C:\\HXW\\IDE'
+  ];
+
+  for (const defaultPath of defaultPaths) {
+    if (fs.existsSync(defaultPath)) {
+      return defaultPath;
+    }
+  }
+
+  vscode.window.showErrorMessage('华芯微IDE路径未找到。请在设置中配置 "dctmculang.idePath"');
+  return null;
+}
+
+// 查找芯片INI文件
+function findChipIniFile(fileDir: string, ideBasePath: string): string | null {
+  const iniFiles = [
+    path.join(fileDir, 'chip.ini'),
+    path.join(fileDir, 'project.ini'),
+    path.join(fileDir, 'device.ini'),
+    path.join(fileDir, 'SN8P2700A.ini')
+  ];
+
+  for (const ini of iniFiles) {
+    if (fs.existsSync(ini)) {
+      return ini;
+    }
+  }
+
+  const buildIniDir = path.join(ideBasePath, 'Bin', 'Build');
+  if (fs.existsSync(buildIniDir)) {
+    try {
+      const entries = fs.readdirSync(buildIniDir);
+      const defaultIni = entries.find(e => e.match(/^SN8P\d+\.ini$/i));
+      if (defaultIni) {
+        return path.join(buildIniDir, defaultIni);
+      }
+      const fallbackIni = path.join(buildIniDir, 'SN8P2700A.ini');
+      if (fs.existsSync(fallbackIni)) {
+        return fallbackIni;
+      }
+    } catch {
+    }
+  }
+
+  return null;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   // 创建诊断集合
   diagnosticCollection = vscode.languages.createDiagnosticCollection('dctpdk-syntax');
@@ -170,6 +431,10 @@ export function activate(context: vscode.ExtensionContext) {
     opacity: '0.4'
   });
   context.subscriptions.push(inactiveDecorationType);
+
+  // 注册 build 命令
+  const buildCommand = vscode.commands.registerCommand('dctmculang.build', buildProject);
+  context.subscriptions.push(buildCommand);
 
   // 监听文档变化（使用防抖优化性能）
   vscode.workspace.onDidChangeTextDocument(e => {

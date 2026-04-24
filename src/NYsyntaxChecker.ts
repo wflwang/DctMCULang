@@ -974,8 +974,8 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
       continue;
     }
 
-    // 指令检查
-    if (!NY_INSTRUCTIONS.has(inst)) {
+    // 指令检查（跳过宏定义内部的行）
+    if (!NY_INSTRUCTIONS.has(inst) && !macroLines.has(line)) {
       diagnostics.push({
         range: new vscode.Range(line, instStart, line, instEnd),
         message: `非法指令：${originalTokens[0]}`,

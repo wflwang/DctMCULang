@@ -580,8 +580,8 @@ export function checkSyntaxErrors(document: vscode.TextDocument): vscode.Diagnos
       continue;
     }
 
-    // 指令检查
-    if (!VALID_INSTRUCTIONS.has(inst)) {
+    // 指令检查（跳过宏定义内部的行）
+    if (!VALID_INSTRUCTIONS.has(inst) && !macroLines.has(line)) {
       diagnostics.push({
         range: new vscode.Range(line, instStart, line, instEnd),
         message: `非法指令：${originalTokens[0]}`,

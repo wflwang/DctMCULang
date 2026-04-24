@@ -66,7 +66,32 @@
                 "scopeName": "source.DctHXW",
                 "path": "./syntaxes/DctHXW.tmLanguage.json"
             }
-        ]
+        ],
+        "commands": [
+            {
+                "command": "dctmculang.build",
+                "title": "Build Project",
+                "category": "DctMCULang"
+            }
+        ],
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "dctmculang.build",
+                    "when": "editorLangId == dctpdk || editorLangId == DctNY || editorLangId == DctHXW"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "DctMCULang",
+            "properties": {
+                "dctmculang.idePath": {
+                    "type": "string",
+                    "default": "E:\\IC\\HXW\\IDE_V2.1.13_20260205\\IDE_V2.1.13_20260205",
+                    "description": "华芯微IDE安装路径，用于编译项目"
+                }
+            }
+        }
     },
     "scripts": {
         "compile": "tsc -p ./",
