@@ -18,16 +18,142 @@ const DEBOUNCE_DELAY = 800; // 用户停止输入 800ms 后再检查
 // 支持的语言
 const SUPPORTED_LANGUAGES = ['dctpdk', 'DctNY', 'DctHXW'];
 
+// 递归收集所有文件中的 #DEFINE 指令
+// excludeFile: 要排除的文件（通常是当前文件）
+function collectDefinesFromFile(filePath: string, visited: Set<string>, excludeFile?: string): Set<string> {
+  const defines = new Set<string>();
+  
+  if (!fs.existsSync(filePath) || visited.has(filePath)) {
+    return defines;
+  }
+  visited.add(filePath);
+  
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  const dir = path.dirname(filePath);
+  
+  // 先收集所有 include 文件路径
+  const includePaths: string[] = [];
+  for (const line of lines) {
+    const trimLine = line.trim();
+    if (trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
+    
+    // 收集 include 文件路径
+    const includeMatch = trimLine.match(/#include\s+([">])([^">]+)\1/i);
+    if (includeMatch) {
+      const incPath = path.join(dir, includeMatch[2]);
+      includePaths.push(incPath);
+    }
+  }
+  
+  // 处理所有 include 文件
+  for (const incPath of includePaths) {
+    const includeDefines = collectDefinesFromFile(incPath, visited, excludeFile);
+    includeDefines.forEach(d => defines.add(d));
+  }
+  
+  // 处理当前文件中的 #DEFINE，考虑条件编译
+  // 如果是排除的文件，跳过
+  if (filePath !== excludeFile) {
+    let depth = 0;
+    let active = true;
+    const stack: boolean[] = [];
+    
+    for (const line of lines) {
+      const trimLine = line.trim();
+      if (trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
+      
+      // 处理条件编译指令
+      if (active) {
+        // #IFDEF xxx
+        const ifdefMatch = trimLine.match(/^(?:#\s*)?\.?(IFDEF)\s+(\w+)/i);
+        if (ifdefMatch) {
+          const defineName = ifdefMatch[2].toUpperCase();
+          const isDefined = defines.has(defineName);
+          stack.push(active);
+          active = isDefined;
+          depth++;
+          continue;
+        }
+        
+        // #IFNDEF xxx
+        const ifndefMatch = trimLine.match(/^(?:#\s*)?\.?(IFNDEF)\s+(\w+)/i);
+        if (ifndefMatch) {
+          const defineName = ifndefMatch[2].toUpperCase();
+          const isDefined = defines.has(defineName);
+          stack.push(active);
+          active = !isDefined;
+          depth++;
+          continue;
+        }
+        
+        // #IF xxx
+        const ifMatch = trimLine.match(/^(?:#\s*)?\.?(IF)\s+(\S+)/i);
+        if (ifMatch) {
+          const val = ifMatch[2];
+          stack.push(active);
+          active = val !== '0';
+          depth++;
+          continue;
+        }
+      }
+      
+      // #ELSE
+      if (/^(?:#\s*)?\.?(ELSE)\b/i.test(trimLine)) {
+        if (depth > 0) {
+          active = !active;
+        }
+        continue;
+      }
+      
+      // #ELIF xxx
+      if (/^(?:#\s*)?\.?(ELIF)\b/i.test(trimLine)) {
+        if (depth > 0) {
+          active = !active;
+        }
+        continue;
+      }
+      
+      // #ENDIF
+      if (/^(?:#\s*)?\.?(ENDIF)\b/i.test(trimLine)) {
+        if (depth > 0) {
+          active = stack.pop() || true;
+          depth--;
+        }
+        continue;
+      }
+      
+      // 收集 #DEFINE
+      if (active) {
+        const defineMatch = trimLine.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)/i);
+        if (defineMatch) {
+          const defineName = defineMatch[1].toUpperCase();
+          defines.add(defineName);
+        }
+      }
+    }
+  }
+  
+  return defines;
+}
+
 // 解析预处理器块，返回非活动的行范围
 // 支持多种格式: #IF, IF, .IF, #IFDEF, IFDEF, .IFDEF 等
 // 预处理指令顺序执行：#define 在 ifndef 之后定义时，ifndef 检测时该符号未定义
-function parsePreprocessorBlocks(content: string): vscode.Range[] {
+function parsePreprocessorBlocks(content: string, filePath: string): vscode.Range[] {
   const lines = content.split('\n');
   const inactiveRanges: vscode.Range[] = [];
   const defines = new Set<string>();
   let depth = 0;
   let inactive = false;
   let blockStart = -1;
+
+  // 收集 include 文件中的 defines（只收集 include 文件中的，不包括当前文件中的）
+  if (filePath) {
+    const visited = new Set<string>();
+    const includeDefines = collectDefinesFromFile(filePath, visited, filePath);
+    includeDefines.forEach(d => defines.add(d));
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const originalLine = lines[i];
@@ -51,7 +177,7 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
       if (!inactive) {
         if (!defines.has(ifdefMatch[2].toUpperCase())) {
           inactive = true;
-          blockStart = i;
+          blockStart = i + 1; // 从下一行开始标记为非活动
         }
       } else {
         depth++;
@@ -65,7 +191,7 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
       if (!inactive) {
         if (defines.has(ifndefMatch[2].toUpperCase())) {
           inactive = true;
-          blockStart = i;
+          blockStart = i + 1; // 从下一行开始标记为非活动
         }
       } else {
         depth++;
@@ -81,7 +207,7 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
         // 支持 0/1 数值判断
         if (val === '0') {
           inactive = true;
-          blockStart = i;
+          blockStart = i + 1; // 从下一行开始标记为非活动
         }
       } else {
         depth++;
@@ -93,12 +219,12 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
     if (/^\s*(?:#\s*)?\.?(ELSE)\b/i.test(line)) {
       if (depth === 0) {
         if (inactive && blockStart >= 0) {
-          inactiveRanges.push(new vscode.Range(blockStart, 0, i, originalLine.length));
+          inactiveRanges.push(new vscode.Range(blockStart, 0, i, 0)); // 到当前行开始标记为非活动
           inactive = false;
           blockStart = -1;
         } else if (!inactive && blockStart === -1) {
           inactive = true;
-          blockStart = i;
+          blockStart = i + 1; // 从下一行开始标记为非活动
         }
       }
       continue;
@@ -108,12 +234,12 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
     if (/^\s*(?:#\s*)?\.?(ELIF)\b/i.test(line)) {
       if (depth === 0) {
         if (inactive && blockStart >= 0) {
-          inactiveRanges.push(new vscode.Range(blockStart, 0, i, originalLine.length));
+          inactiveRanges.push(new vscode.Range(blockStart, 0, i, 0)); // 到当前行开始标记为非活动
           inactive = false;
           blockStart = -1;
         } else if (!inactive && blockStart === -1) {
           inactive = true;
-          blockStart = i;
+          blockStart = i + 1; // 从下一行开始标记为非活动
         }
       }
       continue;
@@ -124,7 +250,7 @@ function parsePreprocessorBlocks(content: string): vscode.Range[] {
       if (depth > 0) {
         depth--;
       } else if (inactive && blockStart >= 0) {
-        inactiveRanges.push(new vscode.Range(blockStart, 0, i, originalLine.length));
+        inactiveRanges.push(new vscode.Range(blockStart, 0, i, 0)); // 到当前行开始标记为非活动
         inactive = false;
         blockStart = -1;
       }
@@ -159,7 +285,7 @@ function updateInactiveDecorations(editor: vscode.TextEditor) {
     return;
   }
 
-  const inactiveRanges = parsePreprocessorBlocks(doc.getText());
+  const inactiveRanges = parsePreprocessorBlocks(doc.getText(), doc.uri.fsPath);
   editor.setDecorations(inactiveDecorationType, inactiveRanges);
 }
 

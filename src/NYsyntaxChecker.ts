@@ -271,14 +271,14 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
       labels.add(labelMatch[1].toUpperCase());
     }
 
-    // #DEFINE xxx yyy 或 #DEFINE xxx 0x38 格式
+    // #DEFINE xxx yyy 或 #DEFINE xxx 0x38 或 #DEFINE xxx 格式（xxx后面是注释）
     // 支持: #DEFINE temp yel, #DEFINE temp 0x38, #DEFINE temp 38
     // 先去除尾部注释再匹配
     const defLineWithoutComment = trimLine.replace(/;.*$/, '').trim();
-    const defMatch = defLineWithoutComment.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)/i);
+    const defMatch = defLineWithoutComment.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.+))?/i);
     if (defMatch) {
       const name = defMatch[1].toUpperCase();
-      const value = defMatch[2].trim();
+      const value = defMatch[2] ? defMatch[2].trim() : '';
       defines.set(name, value);
     }
 
@@ -564,16 +564,136 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
   return { valid: true, value: resolved };
 }
 
+// 递归收集所有文件中的 #DEFINE 指令
+function collectDefinesFromFile(filePath: string, visited: Set<string>): Set<string> {
+  const defines = new Set<string>();
+  
+  if (!fs.existsSync(filePath) || visited.has(filePath)) {
+    return defines;
+  }
+  visited.add(filePath);
+  
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  const dir = path.dirname(filePath);
+  
+  // 先收集所有 include 文件路径
+  const includePaths: string[] = [];
+  for (const line of lines) {
+    const trimLine = line.trim();
+    if (trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
+    
+    // 收集 include 文件路径
+    const includeMatch = trimLine.match(/#include\s+([">])([^">]+)\1/i);
+    if (includeMatch) {
+      const incPath = path.join(dir, includeMatch[2]);
+      includePaths.push(incPath);
+    }
+  }
+  
+  // 处理所有 include 文件
+  for (const incPath of includePaths) {
+    const includeDefines = collectDefinesFromFile(incPath, visited);
+    includeDefines.forEach(d => defines.add(d));
+  }
+  
+  // 处理当前文件中的 #DEFINE，考虑条件编译
+  let depth = 0;
+  let active = true;
+  const stack: boolean[] = [];
+  
+  for (const line of lines) {
+    const trimLine = line.trim();
+    if (trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
+    
+    // 处理条件编译指令
+    if (active) {
+      // #IFDEF xxx
+      const ifdefMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IFDEF)\s+(\w+)/i);
+      if (ifdefMatch) {
+        const defineName = ifdefMatch[2].toUpperCase();
+        const isDefined = defines.has(defineName);
+        stack.push(active);
+        active = isDefined;
+        depth++;
+        continue;
+      }
+      
+      // #IFNDEF xxx
+      const ifndefMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IFNDEF)\s+(\w+)/i);
+      if (ifndefMatch) {
+        const defineName = ifndefMatch[2].toUpperCase();
+        const isDefined = defines.has(defineName);
+        stack.push(active);
+        active = !isDefined;
+        depth++;
+        continue;
+      }
+      
+      // #IF xxx
+      const ifMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IF)\s+(\S+)/i);
+      if (ifMatch) {
+        const val = ifMatch[2];
+        stack.push(active);
+        active = val !== '0';
+        depth++;
+        continue;
+      }
+    }
+    
+    // #ELSE
+    if (/^\s*(?:#\s*)?\.?(ELSE)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = !active;
+      }
+      continue;
+    }
+    
+    // #ELIF xxx
+    if (/^\s*(?:#\s*)?\.?(ELIF)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = !active;
+      }
+      continue;
+    }
+    
+    // #ENDIF
+    if (/^\s*(?:#\s*)?\.?(ENDIF)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = stack.pop() || true;
+        depth--;
+      }
+      continue;
+    }
+    
+    // 收集 #DEFINE
+    if (active) {
+      const defineMatch = trimLine.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)/i);
+      if (defineMatch) {
+        const defineName = defineMatch[1].toUpperCase();
+        defines.add(defineName);
+      }
+    }
+  }
+  
+  return defines;
+}
+
 // 解析非活动块，返回需要跳过的行号集合
 // 支持多种格式: #IF, IF, .IF, #IFDEF, IFDEF, .IFDEF 等
 // 预处理指令顺序执行：#define 在 ifndef 之后定义时，ifndef 检测时该符号未定义
-function getInactiveLinesNY(content: string): Set<number> {
+function getInactiveLinesNY(content: string, filePath: string): Set<number> {
   const lines = content.split('\n');
   const inactiveLines = new Set<number>();
   const defines = new Set<string>();
   let depth = 0;
   let inactive = false;
   let blockStart = -1;
+  
+  // 收集 include 文件中的 defines
+  const visited = new Set<string>();
+  const includeDefines = collectDefinesFromFile(filePath, visited);
+  includeDefines.forEach(d => defines.add(d));
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -900,7 +1020,7 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
   const { labels, defines, macros } = collectSymbols(document, docDir);
 
   // 获取需要跳过的非活动行（预处理指令顺序执行）
-  const inactiveLines = getInactiveLinesNY(content);
+  const inactiveLines = getInactiveLinesNY(content, document.uri.fsPath);
 
   // 获取宏定义内部的行（这些行不进行操作数验证）
   const macroLines = getMacroDefinitionLines(content);
