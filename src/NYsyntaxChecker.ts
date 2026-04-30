@@ -203,7 +203,7 @@ function parsePreprocessorBlocks(lines: string[]): Map<number, { active: boolean
 
 // 递归收集单个文件中的符号
 // defines Map: 符号名 -> 原始定义值（如 "0x38" 或 "next"）
-function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
+function collectSymbolsFromFile(filePath: string, visited: Set<string>, parentDefines?: Set<string>): {
   labels: Set<string>;
   defines: Map<string, string>;
   macros: Set<string>;
@@ -226,15 +226,109 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
   let inCblock = false;
   let cblockStartNum = 0;
   let cblockCurrentNum = 0;
+  
+  // 条件编译相关变量
+  let depth = 0;
+  let active = true;
+  const stack: boolean[] = [];
+  const localDefines = new Set<string>();
+  
+  // 继承父级的 defines（用于条件编译判断）
+  if (parentDefines) {
+    parentDefines.forEach(d => localDefines.add(d));
+  }
 
   for (const line of lines) {
     const trimLine = line.trim();
     if (!trimLine || trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
 
+    // 处理条件编译指令
+    if (active) {
+      // #IFDEF xxx
+      const ifdefMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IFDEF)\s+(\w+)/i);
+      if (ifdefMatch) {
+        const defineName = ifdefMatch[2].toUpperCase();
+        const isDefined = localDefines.has(defineName);
+        stack.push(active);
+        active = isDefined;
+        depth++;
+        continue;
+      }
+      
+      // #IFNDEF xxx
+      const ifndefMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IFNDEF)\s+(\w+)/i);
+      if (ifndefMatch) {
+        const defineName = ifndefMatch[2].toUpperCase();
+        const isDefined = localDefines.has(defineName);
+        stack.push(active);
+        active = !isDefined;
+        depth++;
+        continue;
+      }
+      
+      // #IF xxx
+      const ifMatch = trimLine.match(/^\s*(?:#\s*)?\.?(IF)\s+(\S+)/i);
+      if (ifMatch) {
+        const val = ifMatch[2];
+        stack.push(active);
+        active = val !== '0';
+        depth++;
+        continue;
+      }
+    }
+    
+    // #ELSE
+    if (/^\s*(?:#\s*)?\.?(ELSE)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = !active;
+      }
+      continue;
+    }
+    
+    // #ELIF xxx
+    if (/^\s*(?:#\s*)?\.?(ELIF)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = !active;
+      }
+      continue;
+    }
+    
+    // #ENDIF
+    if (/^\s*(?:#\s*)?\.?(ENDIF)\b/i.test(trimLine)) {
+      if (depth > 0) {
+        active = stack.pop() || true;
+        depth--;
+      }
+      continue;
+    }
+
+    // 只有在活动块中才处理符号定义
+    if (!active) {
+      continue;
+    }
+
+    // #DEFINE xxx yyy 或 #DEFINE xxx 0x38 或 #DEFINE xxx 格式（xxx后面是注释）
+    // 支持: #DEFINE temp yel, #DEFINE temp 0x38, #DEFINE temp 38
+    // 先去除尾部注释再匹配（必须在 cblock 之前处理，因为 cblock 可能使用 #define 的值）
+    const defLineWithoutComment = trimLine.replace(/;.*$/, '').trim();
+    const defMatch = defLineWithoutComment.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.+))?/i);
+    if (defMatch) {
+      const name = defMatch[1].toUpperCase();
+      const value = defMatch[2] ? defMatch[2].trim() : '';
+      defines.set(name, value);
+      localDefines.add(name); // 添加到本地 defines，用于后续条件编译判断
+      continue;
+    }
+
     // 处理 cblock 开始
     const cblockMatch = trimLine.match(/^\s*CBLOCK\s+(\S+)/i);
     if (cblockMatch) {
-      const startNumStr = cblockMatch[1];
+      let startNumStr = cblockMatch[1];
+      // 如果是宏定义，尝试展开
+      const upperStart = startNumStr.toUpperCase();
+      if (defines.has(upperStart)) {
+        startNumStr = defines.get(upperStart)!;
+      }
       const startNum = parseNumber(startNumStr);
       if (startNum !== null && startNum >= 0 && startNum <= 255) {
         inCblock = true;
@@ -271,17 +365,6 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
       labels.add(labelMatch[1].toUpperCase());
     }
 
-    // #DEFINE xxx yyy 或 #DEFINE xxx 0x38 或 #DEFINE xxx 格式（xxx后面是注释）
-    // 支持: #DEFINE temp yel, #DEFINE temp 0x38, #DEFINE temp 38
-    // 先去除尾部注释再匹配
-    const defLineWithoutComment = trimLine.replace(/;.*$/, '').trim();
-    const defMatch = defLineWithoutComment.match(/#\s*DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.+))?/i);
-    if (defMatch) {
-      const name = defMatch[1].toUpperCase();
-      const value = defMatch[2] ? defMatch[2].trim() : '';
-      defines.set(name, value);
-    }
-
     // EQU xxx yyy 格式
     // 支持: temp EQU next, temp EQU 0x38, temp EQU 38
     // 先去除尾部注释再匹配
@@ -309,10 +392,18 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
     }
 
     // 收集 include 文件路径
-    const includeMatch = trimLine.match(/#include\s+([">])([^>"]+)\1/i);
+    // 支持多种格式: #include "file.h", #include <file.h>, #include file.h
+    let includeMatch = trimLine.match(/#include\s+([">])([^>"]+)\1/i);
     if (includeMatch) {
       const incPath = path.join(dir, includeMatch[2]);
       includes.push(incPath);
+    } else {
+      // 尝试匹配没有引号的格式
+      includeMatch = trimLine.match(/#include\s+([A-Za-z0-9_.\\/]+)/i);
+      if (includeMatch) {
+        const incPath = path.join(dir, includeMatch[1]);
+        includes.push(incPath);
+      }
     }
   }
 
@@ -331,8 +422,15 @@ function collectSymbols(document: vscode.TextDocument, docDir: string): {
   const visited = new Set<string>();
 
   // 递归收集函数
-  function collectRecursively(filePath: string, isMainFile: boolean = false) {
-    const result = collectSymbolsFromFile(filePath, visited);
+  function collectRecursively(filePath: string, isMainFile: boolean = false, parentDefines?: Set<string>) {
+    // 创建当前文件的 defines 集合（继承父级）
+    const currentDefines = new Set<string>();
+    if (parentDefines) {
+      parentDefines.forEach(d => currentDefines.add(d));
+    }
+    
+    // 传递当前的 defines 给 collectSymbolsFromFile
+    const result = collectSymbolsFromFile(filePath, visited, currentDefines);
 
     // 合并符号（主文件的符号优先，不被子文件覆盖）
     result.labels.forEach(l => labels.add(l));
@@ -341,12 +439,13 @@ function collectSymbols(document: vscode.TextDocument, docDir: string): {
     result.defines.forEach((v, k) => {
       if (isMainFile || !defines.has(k)) {
         defines.set(k, v);
+        currentDefines.add(k); // 添加到当前 defines，传递给子文件
       }
     });
 
-    // 递归处理所有 include 文件
+    // 递归处理所有 include 文件，传递当前的 defines
     for (const incPath of result.includes) {
-      collectRecursively(incPath, false);
+      collectRecursively(incPath, false, currentDefines);
     }
   }
 
@@ -367,6 +466,11 @@ function parseNumber(str: string): number | null {
   // 十六进制: 38H, FFH, 003H (结尾带 H 表示十六进制)
   if (/^[0-9A-Fa-f]+H$/i.test(trimmed)) {
     const val = parseInt(trimmed.slice(0, -1), 16);
+    return isNaN(val) ? null : val;
+  }
+  // 二进制: 00000001b, 1010B (结尾带 b 或 B 表示二进制)
+  if (/^[01]+[bB]$/.test(trimmed)) {
+    const val = parseInt(trimmed.slice(0, -1), 2);
     return isNaN(val) ? null : val;
   }
   // 十进制: 38, 255
@@ -1008,8 +1112,21 @@ function checkPairedDirectives(content: string, document: vscode.TextDocument): 
   return diagnostics;
 }
 
-export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[] {
+export interface MacroCall {
+  line: number;
+  start: number;
+  end: number;
+  name: string;
+}
+
+export interface NYSyntaxResult {
+  diagnostics: vscode.Diagnostic[];
+  macroCalls: MacroCall[];
+}
+
+export function checkNYSyntax(document: vscode.TextDocument): NYSyntaxResult {
   const diagnostics: vscode.Diagnostic[] = [];
+  const macroCalls: MacroCall[] = [];
   const docDir = path.dirname(document.uri.fsPath);
   const content = document.getText();
   
@@ -1079,8 +1196,14 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
       continue;
     }
 
-    // 宏调用不报错
+    // 宏调用不报错，但记录宏调用位置用于高亮
     if (macros.has(inst)) {
+      macroCalls.push({
+        line: line,
+        start: instStart,
+        end: instEnd,
+        name: inst
+      });
       continue;
     }
 
@@ -1111,14 +1234,32 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
       const realParams = tokens.slice(1).filter(t => t.trim() !== '');
       const originalParams = originalTokens.slice(1);
 
-      // 计算实际的操作数数量（处理带逗号的操作数）
+      // 计算实际的操作数数量（处理带逗号的操作数和表达式）
+      // 表达式如 "C_RBias_High_En | 0x08" 应该被视为一个操作数
       function countOperands(params: string[]): number {
         let count = 0;
+        let inExpression = false; // 是否在表达式中（包含运算符）
+        
         for (const p of params) {
           if (p.includes(',')) {
+            // 带逗号的操作数，分割计数
             count += p.split(',').filter(s => s.trim() !== '').length;
+            inExpression = false;
+          } else if (/^[+\-*/|\(\)\^!&]=?$/.test(p)) {
+            // 运算符，标记在表达式中
+            inExpression = true;
+          } else if (/^\d+$|^0x[0-9A-Fa-f]+$|^[A-Za-z_][A-Za-z0-9_]*$/.test(p)) {
+            // 数字、十六进制数或标识符
+            if (!inExpression) {
+              count++;
+            }
+            // 标识符或数字后面可能还有运算符，保持表达式状态
           } else {
-            count++;
+            // 其他情况，视为普通操作数
+            if (!inExpression) {
+              count++;
+            }
+            inExpression = false;
           }
         }
         return count;
@@ -1205,5 +1346,5 @@ export function checkNYSyntax(document: vscode.TextDocument): vscode.Diagnostic[
     }
   }
 
-  return diagnostics;
+  return { diagnostics, macroCalls };
 }

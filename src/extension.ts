@@ -8,6 +8,7 @@ import { checkNYSyntax } from './NYsyntaxChecker';
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let inactiveDecorationType: vscode.TextEditorDecorationType;
+let macroCallDecorationType: vscode.TextEditorDecorationType;
 let activeEditor: vscode.TextEditor | null = null;
 
 // 防抖优化：用户输入时暂停检查，提高响应速度
@@ -558,6 +559,12 @@ export function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(inactiveDecorationType);
 
+  // 创建宏调用装饰器（蓝紫色）
+  macroCallDecorationType = vscode.window.createTextEditorDecorationType({
+    color: '#6633FF'
+  });
+  context.subscriptions.push(macroCallDecorationType);
+
   // 注册 build 命令
   const buildCommand = vscode.commands.registerCommand('dctmculang.build', buildProject);
   context.subscriptions.push(buildCommand);
@@ -620,16 +627,44 @@ function update(doc: vscode.TextDocument) {
 
     // 根据文件类型启用语法检查
     if (langId === 'dctpdk') {
-      const errors = checkSyntaxErrors(doc);
-      diagnosticCollection.set(doc.uri, errors);
+      const result = checkSyntaxErrors(doc);
+      diagnosticCollection.set(doc.uri, result.diagnostics);
+      
+      // 设置宏调用高亮
+      if (activeEditor && activeEditor.document === doc) {
+        const macroCallRanges = result.macroCalls.map(mc => 
+          new vscode.Range(mc.line, mc.start, mc.line, mc.end)
+        );
+        activeEditor.setDecorations(macroCallDecorationType, macroCallRanges);
+      }
     } else if (langId === 'DctHXW') {
-      const errors = checkHXWSyntax(doc);
-      diagnosticCollection.set(doc.uri, errors);
+      const result = checkHXWSyntax(doc);
+      diagnosticCollection.set(doc.uri, result.diagnostics);
+      
+      // 设置宏调用高亮
+      if (activeEditor && activeEditor.document === doc) {
+        const macroCallRanges = result.macroCalls.map(mc => 
+          new vscode.Range(mc.line, mc.start, mc.line, mc.end)
+        );
+        activeEditor.setDecorations(macroCallDecorationType, macroCallRanges);
+      }
     } else if (langId === 'DctNY') {
-      const errors = checkNYSyntax(doc);
-      diagnosticCollection.set(doc.uri, errors);
+      const result = checkNYSyntax(doc);
+      diagnosticCollection.set(doc.uri, result.diagnostics);
+      
+      // 设置宏调用高亮
+      if (activeEditor && activeEditor.document === doc) {
+        const macroCallRanges = result.macroCalls.map(mc => 
+          new vscode.Range(mc.line, mc.start, mc.line, mc.end)
+        );
+        activeEditor.setDecorations(macroCallDecorationType, macroCallRanges);
+      }
     } else {
       diagnosticCollection.clear();
+      // 清除宏调用高亮
+      if (activeEditor) {
+        activeEditor.setDecorations(macroCallDecorationType, []);
+      }
     }
   } catch (err) {
     console.error('Syntax check error:', err);
@@ -640,4 +675,5 @@ export function deactivate() {
   diagnosticCollection?.clear();
   diagnosticCollection?.dispose();
   inactiveDecorationType?.dispose();
+  macroCallDecorationType?.dispose();
 }

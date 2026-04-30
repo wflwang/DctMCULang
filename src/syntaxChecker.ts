@@ -608,8 +608,21 @@ function getMacroDefinitionLines(content: string): Set<number> {
   return macroLines;
 }
 
-export function checkSyntaxErrors(document: vscode.TextDocument): vscode.Diagnostic[] {
+export interface MacroCall {
+  line: number;
+  start: number;
+  end: number;
+  name: string;
+}
+
+export interface PDKSyntaxResult {
+  diagnostics: vscode.Diagnostic[];
+  macroCalls: MacroCall[];
+}
+
+export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResult {
   const diagnostics: vscode.Diagnostic[] = [];
+  const macroCalls: MacroCall[] = [];
   const docDir = path.dirname(document.uri.fsPath);
   const content = document.getText();
   const { labels, defines, macros } = collectSymbols(document, docDir);
@@ -691,8 +704,14 @@ export function checkSyntaxErrors(document: vscode.TextDocument): vscode.Diagnos
       continue;
     }
 
-    // 宏调用不报错
+    // 宏调用不报错，但记录宏调用位置用于高亮
     if (macros.has(inst)) {
+      macroCalls.push({
+        line: line,
+        start: instStart,
+        end: instEnd,
+        name: inst
+      });
       continue;
     }
 
@@ -812,5 +831,5 @@ export function checkSyntaxErrors(document: vscode.TextDocument): vscode.Diagnos
     }
   }
 
-  return diagnostics;
+  return { diagnostics, macroCalls };
 }

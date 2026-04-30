@@ -1,4 +1,4 @@
-;//@@@HXW inst###
+;//@@@NY inst###
 
 #define a   r0
 #include "../pad.inc"
