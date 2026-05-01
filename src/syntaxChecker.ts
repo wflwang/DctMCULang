@@ -12,7 +12,7 @@ const VALID_INSTRUCTIONS = new Set([
   'AND', 'OR', 'XOR', 'NEG', 'NOT', 'CLEAR',
   'SET0', 'SET1', 'INC', 'DEC', 'SL', 'SR',
   'SLC', 'SRC', 'COMP', 'SWAP', 'SWAPC',
-  'GOTO', 'CEQSN', 'CENQSN', 'T0SN', 'T1SN',
+  'GOTO', 'CEQSN', 'CENQSN', 'CNEQSN', 'T0SN', 'T1SN',
   'IZSN', 'DZSN', 'CALL', 'RET', 'RETI', 'NOP',
   'PUSHAF', 'POPAF', 'LDT16', 'STT16', 'IDXM', 'XCH',
   'ENGINT', 'PCADD', 'DISGINT', 'STOPSYS', 'STOPEXE',
@@ -22,7 +22,8 @@ const VALID_INSTRUCTIONS = new Set([
 // 伪指令
 const VALID_PSEUDO = new Set([
   'MACRO', 'ENDM', 'ORG', 'END', 'EQU', 'DB', 'DW',
-  'IF', 'ELSE', 'ENDIF', '.ADJUST_IC'
+  'IF', 'ELSE', 'ENDIF', '.ADJUST_IC',
+  'BYTE', 'WORD', '.RAMADR', '.ROMADR'
 ]);
 
 // #define 类伪指令
@@ -35,7 +36,7 @@ const DEFINE_PSEUDO = new Set([
 // PDK 立即数指令（需要验证第一个操作数）
 const PDK_IMMEDIATE_INSTRUCTIONS = new Set([
   'MOVR', 'ADDM', 'SUB', 'ADD', 'ADDC', 'NADD', 'SUBC',
-  'AND', 'OR', 'XOR', 'COMP', 'CEQSN', 'CENQSN'
+  'AND', 'OR', 'XOR', 'COMP', 'CEQSN', 'CENQSN', 'CNEQSN'
 ]);
 
 // 操作数规则
@@ -45,7 +46,7 @@ const RULES: { [key: string]: { operands: number } } = {
   'NADD': { operands: 2 }, 'SUB': { operands: 2 },
   'SUBC': { operands: 2 },
   'AND': { operands: 2 }, 'OR': { operands: 2 }, 'XOR': { operands: 2 },
-  'COMP': { operands: 2 }, 'CEQSN': { operands: 2 }, 'CENQSN': { operands: 2 },
+  'COMP': { operands: 2 }, 'CEQSN': { operands: 2 }, 'CENQSN': { operands: 2 }, 'CNEQSN': { operands: 2 },
   'XCH': { operands: 1 }, 'INC': { operands: 1 }, 'DEC': { operands: 1 },
   'SL': { operands: 1 }, 'SR': { operands: 1 }, 'SLC': { operands: 1 },
   'SRC': { operands: 1 }, 'SWAP': { operands: 1 }, 'SWAPC': { operands: 1 },
@@ -110,6 +111,9 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
   const lines = content.split('\n');
   const dir = path.dirname(filePath);
 
+  let inRamAdrBlock = false;
+  let currentRamAddr = 0;
+
   for (const line of lines) {
     const trimLine = line.trim();
     if (!trimLine || trimLine.startsWith(';') || trimLine.startsWith('//')) continue;
@@ -144,6 +148,55 @@ function collectSymbolsFromFile(filePath: string, visited: Set<string>): {
     if (macroInfo.isMacro) {
       macros.add(macroInfo.macroName);
       labels.add(macroInfo.macroName);
+    }
+
+    // .ramadr xxx 开始 RAM 块定义
+    const ramAdrMatch = trimLine.match(/^\.ramadr\s+(\S+)/i);
+    if (ramAdrMatch) {
+      inRamAdrBlock = true;
+      const addrStr = ramAdrMatch[1];
+      // 尝试解析地址，如果是宏定义则尝试展开
+      let addrValue = parseNumber(addrStr);
+      if (addrValue === null) {
+        // 可能是宏定义，尝试从已收集的 defines 中查找
+        const upperAddr = addrStr.toUpperCase();
+        if (defines.has(upperAddr)) {
+          addrValue = parseNumber(defines.get(upperAddr)!);
+        }
+      }
+      currentRamAddr = addrValue !== null ? addrValue : 0;
+      continue;
+    }
+
+    // RAM 块内的变量定义
+    if (inRamAdrBlock) {
+      // byte xxx - 单个字节变量
+      const byteMatch = trimLine.match(/^\s*byte\s+([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+)\])?/i);
+      if (byteMatch) {
+        const varName = byteMatch[1].toUpperCase();
+        const arraySize = byteMatch[2] ? parseInt(byteMatch[2], 10) : 1;
+        labels.add(varName);
+        defines.set(varName, `0x${currentRamAddr.toString(16)}`);
+        currentRamAddr += arraySize;
+        continue;
+      }
+
+      // word xxx - 双字节变量
+      const wordMatch = trimLine.match(/^\s*word\s+([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+)\])?/i);
+      if (wordMatch) {
+        const varName = wordMatch[1].toUpperCase();
+        const arraySize = wordMatch[2] ? parseInt(wordMatch[2], 10) : 1;
+        labels.add(varName);
+        defines.set(varName, `0x${currentRamAddr.toString(16)}`);
+        currentRamAddr += arraySize * 2;
+        continue;
+      }
+
+      // 遇到其他内容，结束 RAM 块
+      const lowerTrimLine = trimLine.toLowerCase();
+      if (!lowerTrimLine.startsWith('byte') && !lowerTrimLine.startsWith('word')) {
+        inRamAdrBlock = false;
+      }
     }
 
     // 收集 include 文件路径
@@ -195,6 +248,11 @@ function parseNumber(str: string): number | null {
   // 十六进制: 0x38, 0xFF
   if (/^0x[0-9A-Fa-f]+$/.test(trimmed)) {
     const val = parseInt(trimmed, 16);
+    return isNaN(val) ? null : val;
+  }
+  // 二进制: 00000001b, 1010B (结尾带 b 或 B 表示二进制)
+  if (/^[01]+[bB]$/.test(trimmed)) {
+    const val = parseInt(trimmed.slice(0, -1), 2);
     return isNaN(val) ? null : val;
   }
   // 十进制: 38, 255
@@ -608,6 +666,48 @@ function getMacroDefinitionLines(content: string): Set<number> {
   return macroLines;
 }
 
+// 收集 .ramadr 块内部的行号范围
+function getRamAdrLines(content: string): Set<number> {
+  const lines = content.split('\n');
+  const ramAdrLines = new Set<number>();
+  let inRamAdr = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // 跳过空行和注释行
+    if (!line || line.startsWith(';') || line.startsWith('//')) {
+      // 如果在 .ramadr 块内，注释行也添加到跳过列表
+      if (inRamAdr) {
+        ramAdrLines.add(i);
+      }
+      continue;
+    }
+
+    // 去除注释后检查
+    const lineWithoutComment = line.replace(/;.*$/, '').trim();
+
+    // 检查是否是 .ramadr 块开始
+    if (/^\.ramadr\b/i.test(lineWithoutComment)) {
+      inRamAdr = true;
+      ramAdrLines.add(i);
+      continue;
+    }
+
+    // 如果在 .ramadr 块内
+    if (inRamAdr) {
+      ramAdrLines.add(i);
+
+      // 检查是否是 .ramadr 块结束（遇到非 byte/word 的指令）
+      if (!/^\s*(byte|word)\b/i.test(lineWithoutComment)) {
+        inRamAdr = false;
+      }
+    }
+  }
+
+  return ramAdrLines;
+}
+
 export interface MacroCall {
   line: number;
   start: number;
@@ -632,6 +732,9 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
 
   // 获取宏定义内部的行（这些行不进行操作数验证）
   const macroLines = getMacroDefinitionLines(content);
+  
+  // 获取 .ramadr 块内部的行（这些行不进行指令检查）
+  const ramAdrLines = getRamAdrLines(content);
 
   // 逐行检查
   for (let line = 0; line < document.lineCount; line++) {
@@ -654,6 +757,8 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
     if (commentIdx === -1) commentIdx = text.indexOf('//');
     if (commentIdx !== -1) {
       codePart = text.substring(0, commentIdx).trim();
+    } else {
+      codePart = text.trim();
     }
 
     if (!codePart) continue;
@@ -720,8 +825,11 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
       continue;
     }
 
-    // 指令检查（跳过宏定义内部的行）
-    if (!VALID_INSTRUCTIONS.has(inst) && !macroLines.has(line)) {
+    // 使用原始指令名称检查（避免 expandDefines 替换了指令本身）
+    const originalInst = originalTokens[0].toUpperCase();
+
+    // 指令检查（跳过宏定义内部的行和 .ramadr 块内的行）
+    if (!VALID_INSTRUCTIONS.has(originalInst) && !macroLines.has(line) && !ramAdrLines.has(line)) {
       diagnostics.push({
         range: new vscode.Range(line, instStart, line, instEnd),
         message: `非法指令：${originalTokens[0]}`,
@@ -730,21 +838,39 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
       continue;
     }
 
-    // 操作数检查（跳过宏定义内部的行）
+    // 操作数检查（跳过宏定义内部的行和 .ramadr 块内的行）
     const rule = RULES[inst];
-    if (rule && !macroLines.has(line)) {
+    if (rule && !macroLines.has(line) && !ramAdrLines.has(line)) {
       // 检查操作数数量
       const realParams = tokens.slice(1).filter(t => t.trim() !== '');
       const originalParams = originalTokens.slice(1);
 
-      // 计算真实的操作数数量（逗号分隔的算多个）
+      // 计算真实的操作数数量（处理带逗号的操作数和表达式）
+      // 表达式如 "C_RBias_High_En | 0x08" 应该被视为一个操作数
       function countOperands(params: string[]): number {
         let count = 0;
+        let inExpression = false; // 是否在表达式中（包含运算符）
+        
         for (const p of params) {
           if (p.includes(',')) {
-            count += p.split(',').length;
+            // 带逗号的操作数，分割计数
+            count += p.split(',').filter(s => s.trim() !== '').length;
+            inExpression = false;
+          } else if (/^[+\-*/|\(\)\^!&]=?$/.test(p)) {
+            // 运算符，标记在表达式中
+            inExpression = true;
+          } else if (/^\d+$|^0x[0-9A-Fa-f]+$|^[A-Za-z_][A-Za-z0-9_]*$/.test(p)) {
+            // 数字、十六进制数或标识符
+            if (!inExpression) {
+              count++;
+            }
+            // 标识符或数字后面可能还有运算符，保持表达式状态
           } else {
-            count += 1;
+            // 其他情况，视为普通操作数
+            if (!inExpression) {
+              count++;
+            }
+            inExpression = false;
           }
         }
         return count;
