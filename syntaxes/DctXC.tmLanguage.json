@@ -1,0 +1,61 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "DctXC",
+    "scopeName": "source.DctXC",
+    "fileTypes": ["xc", "asm", "inc"],
+    "patterns": [
+        {
+            "name": "comment.line.xc",
+            "match": "(;|//).*$",
+            "settings": { "foreground": "#008000" }
+        },
+        {
+            "name": "entity.name.label.assembly",
+            "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*):",
+            "settings": { "foreground": "#FFCC00" }
+        },
+        {
+            "name": "keyword.control.pseudo.xc",
+            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM|BYTE|WORD|.ADJUST_IC|.RAMADR|.ROMADR|.CHIP|.WRITER|.OUTFILE|.CODE_OPTION)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "keyword.control.pseudo.xc",
+            "match": "#(?i)\\b(DEFINE|INCLUDE|IF|IFDEF|IFNDEF|ELIF|ELSE|ENDIF)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "keyword.control.pseudo.xc",
+            "match": "(?i)\\b(IF|IFDEF|IFNDEF|ELIF|ELSE|ENDIF)\\b",
+            "settings": { "foreground": "#6699FF" }
+        },
+        {
+            "name": "string.include.file.xc",
+            "match": "([\">])([^\">]+)\\1",
+            "captures": {
+                "1": { "settings": { "foreground": "#6699FF" } },
+                "2": { "settings": { "foreground": "#FFFF99", "background": "#333300" } }
+            }
+        },
+        {
+            "name": "keyword.instruction.xc",
+            "match": "(?i)\\b(ADD|AND|CLRA|CLR|INVA|INV|DA|DECA|DEC|DJA|DJ|INCA|INC|IJA|IJ|MOV|OR|SUB|XOR|BTC|BTS|JBTC|JBTS|LCR|LCA|RCR|RCA|SWAP|SWAPA|CALL|DI|EI|JMP|NOP|RET|RETI|RETL|SLEEP|CWDT|TBRD)\\b",
+            "settings": { "foreground": "#0066FF" }
+        },
+        {
+            "name": "variable.register.xc",
+            "match": "(?i)\\b(A|R|SP|PC|WDT)\\b",
+            "settings": { "foreground": "#FF6600" }
+        },
+        {
+            "name": "constant.numeric.xc",
+            "match": "\\b(0x[0-9A-Fa-f]+|\\$[0-9A-Fa-f]+|0b[01]+|[0-9]+)\\b",
+            "settings": { "foreground": "#FF00FF" }
+        },
+        {
+            "name": "keyword.operator.xc",
+            "match": "\\+|-|\\*|/|\\&|\\||\\^|~|<<|>>|==|!=|<|>|<=|>=|=|,",
+            "settings": { "foreground": "#FF6600" }
+        }
+    ]
+}

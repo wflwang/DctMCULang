@@ -15,7 +15,7 @@ const NY_INSTRUCTIONS = new Set([
   'BTRSC', 'BTRSS', 'INCRSZ', 'DECRSZ',
   
   // 数据传输指令
-  'MOVAR', 'MOVR', 'MOVIA', 'IOST', 'IOSTR', 'SFUN', 'SFUNR', 'T0MD', 'T0MDR',
+  'MOVAR', 'MOVR', 'MOVIA', 'IOST', 'IOSTR', 'SFUN', 'SFUNR', 'TFUN', 'TFUNR', 'T0MD', 'T0MDR',
   
   // 其他指令
   'NOP', 'SLEEP', 'CLRWDT', 'ENI', 'DISI', 'INT',
@@ -36,7 +36,8 @@ const NY_PSEUDO = new Set([
   'FOR', 'LINES', 'LIST', 'LOCAL', 'MAXMACRODEPTH',
   'MESSG', 'NEWPAGE', 'NOEXPAND', 'ORGALIGN', 'RADIX',
   'REPEAT', 'SUBTITLE', 'SWITCH', 'TITLE', 'UNTIL',
-  'VARIABLE', 'WHILE', '.ALIGN2'
+  'VARIABLE', 'WHILE', '.ALIGN2',
+  'CASE', 'DEFAULT', 'BREAK'
 ]);
 
 // 预处理条件指令 (支持 #IF / IF / .IF 等多种格式)
@@ -84,6 +85,7 @@ const NY_RULES: { [key: string]: { operands: number } } = {
   'MOVAR': { operands: 1 }, 'MOVR': { operands: 2 }, 'MOVIA': { operands: 1 },
   'IOST': { operands: 1 }, 'IOSTR': { operands: 1 },
   'SFUN': { operands: 1 }, 'SFUNR': { operands: 1 },
+  'TFUN': { operands: 1 }, 'TFUNR': { operands: 1 },
   'T0MD': { operands: 0 }, 'T0MDR': { operands: 0 },
   
   // 其他指令
@@ -540,6 +542,10 @@ function evaluateExpression(expr: string, defines: Map<string, string>): number 
     // 替换十六进制格式
     expanded = expanded.replace(/0x([0-9A-Fa-f]+)/gi, (_, hex) => parseInt(hex, 16).toString());
 
+    // 处理 ~ 取反操作（~x 表示 8 位取反，即 255-x）
+    expanded = expanded.replace(/~([0-9A-Fa-f]+)/gi, (_, num) => (255 - parseInt(num, 10)).toString());
+    expanded = expanded.replace(/~\(([^)]+)\)/g, (_, inner) => `(255-(${inner}))`);
+
     // 移除空格
     const safeExpr = expanded.replace(/\s/g, '');
 
@@ -586,9 +592,9 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
           return { valid: false, error: `符号 ${firstPart} 的值 ${resolved} 超出范围 (0-255)` };
         }
       }
-      // 无法追踪到纯数字值，可能是带运算符的表达式（如 0x04|1、39+5）
+      // 无法追踪到纯数字值，可能是带运算符的表达式（如 0x04|1、39+5、~0x08）
       // 尝试计算表达式
-      if (/[+\-*/|\(\)\^!]/.test(firstPart)) {
+      if (/[+\-*/|\(\)\^!~]/.test(firstPart)) {
         const evalResult = evaluateExpression(firstPart, defines);
         if (evalResult !== null) {
           if (evalResult >= 0 && evalResult <= 255) {
@@ -611,8 +617,8 @@ function validateOperand(operand: string, defines: Map<string, string>): { valid
     return { valid: false, error: `操作数格式错误` };
   }
 
-  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10、0|(0<<1)）
-  if (/[+\-*/|\(\)\^!]/.test(trimmed)) {
+  // 处理带运算符的表达式（如 HeadRAM_ADR+31、EndRAM_ADR-1、val*2+1、port|0x10、0|(0<<1)、~0x08）
+  if (/[+\-*/|\(\)\^!~]/.test(trimmed)) {
     // 尝试计算表达式
     const evalResult = evaluateExpression(trimmed, defines);
     if (evalResult !== null) {
@@ -987,7 +993,7 @@ function getCblockDefinitionLines(content: string): Set<number> {
 }
 
 // 检查成对指令（条件指令、宏定义、cblock）
-function checkPairedDirectives(content: string, document: vscode.TextDocument): vscode.Diagnostic[] {
+function checkPairedDirectives(content: string, document: vscode.TextDocument, defines: Map<string, string>): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
   const lines = content.split('\n');
   
@@ -1054,8 +1060,18 @@ function checkPairedDirectives(content: string, document: vscode.TextDocument): 
           severity: vscode.DiagnosticSeverity.Error
         });
       } else {
-        const startNumStr = startNumMatch[1];
-        const startNum = parseNumber(startNumStr);
+        let startNumStr = startNumMatch[1];
+        // 如果是宏定义，尝试展开
+        const upperStart = startNumStr.toUpperCase();
+        if (defines.has(upperStart)) {
+          startNumStr = defines.get(upperStart)!;
+        }
+        // 先尝试直接解析数字
+        let startNum = parseNumber(startNumStr);
+        // 如果直接解析失败，尝试计算表达式（支持 +、-、*、/ 等运算符）
+        if (startNum === null && /[+\-*/|\(\)]/.test(startNumStr)) {
+          startNum = evaluateExpression(startNumStr, defines);
+        }
         if (startNum === null || startNum < 0 || startNum > 255) {
           // cblock开始数字错误
           diagnostics.push({
@@ -1130,11 +1146,12 @@ export function checkNYSyntax(document: vscode.TextDocument): NYSyntaxResult {
   const docDir = path.dirname(document.uri.fsPath);
   const content = document.getText();
   
-  // 检查成对指令
-  const pairedDiagnostics = checkPairedDirectives(content, document);
-  diagnostics.push(...pairedDiagnostics);
-  
+  // 先收集符号（包括 #define）
   const { labels, defines, macros } = collectSymbols(document, docDir);
+  
+  // 检查成对指令（现在可以使用 defines）
+  const pairedDiagnostics = checkPairedDirectives(content, document, defines);
+  diagnostics.push(...pairedDiagnostics);
 
   // 获取需要跳过的非活动行（预处理指令顺序执行）
   const inactiveLines = getInactiveLinesNY(content, document.uri.fsPath);

@@ -23,7 +23,8 @@ const VALID_INSTRUCTIONS = new Set([
 const VALID_PSEUDO = new Set([
   'MACRO', 'ENDM', 'ORG', 'END', 'EQU', 'DB', 'DW',
   'IF', 'ELSE', 'ENDIF', '.ADJUST_IC',
-  'BYTE', 'WORD', '.RAMADR', '.ROMADR'
+  'BYTE', 'WORD', '.RAMADR', '.ROMADR',
+  '.CHIP', '.WRITER', '.OUTFILE', '.CODE_OPTION'
 ]);
 
 // #define 类伪指令
@@ -780,9 +781,10 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
     const inst = tokens[0].toUpperCase();
     const instStart = text.indexOf(originalTokens[0]);
     const instEnd = instStart + originalTokens[0].length;
+    const originalInst = originalTokens[0].toUpperCase();
 
     // 伪指令不报错
-    if (VALID_PSEUDO.has(inst) || DEFINE_PSEUDO.has(inst)) {
+    if (VALID_PSEUDO.has(originalInst) || DEFINE_PSEUDO.has(originalInst)) {
       // #include 文件存在性检查
       if (inst === 'INCLUDE' || inst === '#INCLUDE') {
         const includeMatch = text.match(/#include\s+([">])([^">]+)\1/i);
@@ -825,11 +827,8 @@ export function checkSyntaxErrors(document: vscode.TextDocument): PDKSyntaxResul
       continue;
     }
 
-    // 使用原始指令名称检查（避免 expandDefines 替换了指令本身）
-    const originalInst = originalTokens[0].toUpperCase();
-
     // 指令检查（跳过宏定义内部的行和 .ramadr 块内的行）
-    if (!VALID_INSTRUCTIONS.has(originalInst) && !macroLines.has(line) && !ramAdrLines.has(line)) {
+    if (!VALID_INSTRUCTIONS.has(originalInst) && !VALID_PSEUDO.has(originalInst) && !macroLines.has(line) && !ramAdrLines.has(line)) {
       diagnostics.push({
         range: new vscode.Range(line, instStart, line, instEnd),
         message: `非法指令：${originalTokens[0]}`,

@@ -1,9 +1,15 @@
-;//@@@NY inst###
+;//@@@PDK inst###
 
-#define a   r0
-#include "../pad.inc"
+//#define a   r0
+//#include "../pad.inc"
 //ddd
 ;
+    .ramadr     0x000
+byte    topIndex
+byte    v_workflag
+
+
+
 ad10 equ    d87
 #define d87 bb3
 #define bb3 y38
@@ -29,9 +35,10 @@ ddx  macro  temp3,temp2
 endm
 
 
-    ORG 0x1000
+    .romadr     0x00
 
     goto       LOOP
+
 ifdef dd
     mov     a,1
     MOV     3

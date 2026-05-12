@@ -16,7 +16,7 @@
         },
         {
             "name": "keyword.control.pseudo.pdk",
-            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM|.ADJUST_IC)\\b",
+            "match": "(?i)\\b(ORG|END|EQU|DB|DW|MACRO|ENDM|BYTE|WORD|\\.ADJUST_IC|\\.RAMADR|\\.ROMADR|\\.CHIP|\\.WRITER|\\.OUTFILE|\\.CODE_OPTION)\\b",
             "settings": { "foreground": "#6699FF" }
         },
         {

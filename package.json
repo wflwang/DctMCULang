@@ -48,6 +48,15 @@
                     "华芯微"
                 ],
                 "extensions": []
+            },
+            {
+                "id": "DctXC",
+                "aliases": [
+                    "DctXC",
+                    "矽杰微",
+                    "XC8PT8503"
+                ],
+                "extensions": []
             }
         ],
         "grammars": [
@@ -65,6 +74,11 @@
                 "language": "DctHXW",
                 "scopeName": "source.DctHXW",
                 "path": "./syntaxes/DctHXW.tmLanguage.json"
+            },
+            {
+                "language": "DctXC",
+                "scopeName": "source.DctXC",
+                "path": "./syntaxes/DctXC.tmLanguage.json"
             }
         ],
         "commands": [

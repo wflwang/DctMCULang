@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import { checkSyntaxErrors } from './syntaxChecker';
 import { checkHXWSyntax } from './HXWsyntaxChecker';
 import { checkNYSyntax } from './NYsyntaxChecker';
+import { checkXCSyntax } from './XCsyntaxChecker';
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let inactiveDecorationType: vscode.TextEditorDecorationType;
@@ -17,7 +18,7 @@ let isUserTyping = false;
 const DEBOUNCE_DELAY = 800; // 用户停止输入 800ms 后再检查
 
 // 支持的语言
-const SUPPORTED_LANGUAGES = ['dctpdk', 'DctNY', 'DctHXW'];
+const SUPPORTED_LANGUAGES = ['dctpdk', 'DctNY', 'DctHXW', 'DctXC'];
 
 // 递归收集所有文件中的 #DEFINE 指令
 // excludeFile: 要排除的文件（通常是当前文件）
@@ -277,7 +278,8 @@ function updateInactiveDecorations(editor: vscode.TextEditor) {
   // 检查是否是支持的语言
   let isSupported = false;
   if (first === ';//@@@PDK inst###' || first === ';//@@@PAK inst###' ||
-      first === ';//@@@NY inst###' || first === ';//@@@HXW inst###') {
+      first === ';//@@@NY inst###' || first === ';//@@@HXW inst###' ||
+      first === ';//@@@XC inst###') {
     isSupported = true;
   }
 
@@ -314,6 +316,8 @@ function buildProject() {
     langId = 'NY';
   } else if (firstLine === ';//@@@HXW inst###') {
     langId = 'HXW';
+  } else if (firstLine === ';//@@@XC inst###') {
+    langId = 'XC';
   } else {
     vscode.window.showErrorMessage('Unsupported language. Please add language header.');
     return;
@@ -613,6 +617,8 @@ function update(doc: vscode.TextDocument) {
       langId = 'DctNY';
     } else if (first === ';//@@@HXW inst###') {
       langId = 'DctHXW';
+    } else if (first === ';//@@@XC inst###') {
+      langId = 'DctXC';
     }
 
     if (!langId) {
@@ -650,6 +656,17 @@ function update(doc: vscode.TextDocument) {
       }
     } else if (langId === 'DctNY') {
       const result = checkNYSyntax(doc);
+      diagnosticCollection.set(doc.uri, result.diagnostics);
+      
+      // 设置宏调用高亮
+      if (activeEditor && activeEditor.document === doc) {
+        const macroCallRanges = result.macroCalls.map(mc => 
+          new vscode.Range(mc.line, mc.start, mc.line, mc.end)
+        );
+        activeEditor.setDecorations(macroCallDecorationType, macroCallRanges);
+      }
+    } else if (langId === 'DctXC') {
+      const result = checkXCSyntax(doc);
       diagnosticCollection.set(doc.uri, result.diagnostics);
       
       // 设置宏调用高亮
